@@ -152,8 +152,10 @@ function initNav() {
 
   window.addEventListener('scroll', onScroll, { passive: true });
 
-  // Highlight the section currently in view.
-  const links = $$('.nav__links a');
+  /* Section spy for navs that point at in-page anchors. The main nav links to
+     other pages now, and each page marks its own link with aria-current, so
+     this finds nothing there and quietly does nothing. */
+  const links = $$('.nav__links a[href^="#"]');
   const targets = links
     .map(a => ({ a, sec: $(a.getAttribute('href')) }))
     .filter(t => t.sec);
@@ -497,14 +499,22 @@ function initTimeline() {
 /* ===== PRODUCTS: render, filter, search, modal ======================= */
 function initProducts() {
   const grid  = $('#pgrid');
+  if (!grid || typeof PRODUCTS === 'undefined') return;
+
   const cats  = $('#cats');
   const input = $('#search');
   const clear = $('#searchClear');
   const empty = $('#empty');
   const count = $('#pcount');
-  if (!grid || typeof PRODUCTS === 'undefined') return;
 
-  let activeCat = 'All';
+  /* A grid with data-limit is a teaser (the home page shows eight articles
+     with no filter bar). Without it the grid is the full catalogue. */
+  const limit = parseInt(grid.dataset.limit, 10) || 0;
+
+  /* products.html?cat=Hoodies opens straight onto that category, which is how
+     the footer's product links work. */
+  const wanted = new URLSearchParams(location.search).get('cat');
+  let activeCat = (!limit && wanted && CATEGORIES.indexOf(wanted) > -1) ? wanted : 'All';
   let query = '';
 
   /* --- Category buttons (with live counts) ---
@@ -514,7 +524,7 @@ function initProducts() {
     cats.innerHTML = CATEGORIES.map((c) => {
       const n = c === 'All' ? PRODUCTS.length : PRODUCTS.filter(p => p.category === c).length;
       return `<button type="button" class="fbtn" data-cat="${esc(c)}"
-                      aria-pressed="${c === 'All'}">
+                      aria-pressed="${c === activeCat}">
                 ${esc(c)}<span aria-hidden="true">${n}</span>
               </button>`;
     }).join('');
@@ -589,7 +599,8 @@ function initProducts() {
   }
 
   function render() {
-    const list = PRODUCTS.filter(match);
+    let list = PRODUCTS.filter(match);
+    if (limit) list = list.slice(0, limit);
     grid.innerHTML = list.map(card).join('');
     if (empty) empty.hidden = list.length > 0;
     if (count) {
@@ -603,11 +614,9 @@ function initProducts() {
   /* --- Detail modal --- */
   const modalEl = $('#modal');
   const dialog = modalEl ? makeDialog(modalEl) : null;
-  let current = null;   // the product the modal is currently showing
 
   function openModal(p) {
     if (!dialog) return;
-    current = p;
 
     const img = $('#modalImg');
     img.src = p.image;
@@ -634,17 +643,12 @@ function initProducts() {
                  (p.material ? ` (${p.material})` : '') + '.';
     $('#modalWa').href = `https://wa.me/${WA_NUMBER}?text=${encodeURIComponent(text)}`;
 
-    dialog.open();
-  }
+    /* The quote form lives on contact.html, so carry the article across in the
+       URL and let initContactPrefill select it there. */
+    const quote = $('#modalQuote');
+    if (quote) quote.href = 'contact.html?product=' + encodeURIComponent(p.name);
 
-  // One listener for the life of the page, reading whichever product is open.
-  const quoteLink = $('#modalQuote');
-  if (quoteLink) {
-    quoteLink.addEventListener('click', () => {
-      const sel = $('#productSelect');
-      if (sel && current) sel.value = current.name;
-      dialog.close();
-    });
+    dialog.open();
   }
 
   grid.addEventListener('click', (e) => {
@@ -672,33 +676,33 @@ function initProducts() {
     });
   }
 
-  /* --- Populate the quote form's product dropdown --- */
-  const select = $('#productSelect');
-  if (select) {
-    const groups = {};
-    PRODUCTS.forEach((p) => {
-      (groups[p.category] = groups[p.category] || []).push(p.name);
-    });
-    let html = '<option value="">Select an article or range</option>';
-    Object.keys(groups).forEach((cat) => {
-      html += `<optgroup label="ZONIXA ${esc(cat)}">`;
-      groups[cat].forEach(n => { html += `<option>${esc(n)}</option>`; });
-      html += '</optgroup>';
-    });
-    html += '<optgroup label="MSP Sports (Bottom Wear)">' +
-            ['Lowers', 'Track Pants', 'Nikkar', 'Capri', 'Shorts']
-              .map(n => `<option>MSP Sports — ${n}</option>`).join('') +
-            '</optgroup>';
-    select.innerHTML = html;
-  }
-
   render();
+}
 
-  // Let other code jump straight to a category.
-  window.setProductCategory = function (cat) {
-    const btn = cats && $(`.fbtn[data-cat="${cat}"]`, cats);
-    if (btn) btn.click();
-  };
+
+/* ===== QUOTE FORM PRODUCT DROPDOWN ==================================
+   Lives outside initProducts because the form is on contact.html, which has
+   no product grid at all. */
+function initProductSelect() {
+  const select = $('#productSelect');
+  if (!select || typeof PRODUCTS === 'undefined') return;
+
+  const groups = {};
+  PRODUCTS.forEach((p) => {
+    (groups[p.category] = groups[p.category] || []).push(p.name);
+  });
+
+  let html = '<option value="">Select an article or range</option>';
+  Object.keys(groups).forEach((cat) => {
+    html += `<optgroup label="ZONIXA ${esc(cat)}">`;
+    groups[cat].forEach(n => { html += `<option>${esc(n)}</option>`; });
+    html += '</optgroup>';
+  });
+  html += '<optgroup label="MSP Sports (Bottom Wear)">' +
+          ['Lowers', 'Track Pants', 'Nikkar', 'Capri', 'Shorts']
+            .map(n => `<option>MSP Sports — ${n}</option>`).join('') +
+          '</optgroup>';
+  select.innerHTML = html;
 }
 
 
@@ -728,8 +732,15 @@ function initGallery() {
   const grid = $('#ggrid');
   if (!grid || typeof PRODUCTS === 'undefined') return;
 
-  const order = PRODUCTS.slice(0, 16).map((p, i) => ({
-    src: p.image, cap: p.name, kind: i === 0 ? 'feature' : 'tall', w: 982, h: 1147
+  /* A grid with data-limit is the home page's teaser strip; the gallery page
+     leaves it off and shows the whole set. */
+  const limit = parseInt(grid.dataset.limit, 10) || PRODUCTS.length;
+  const feature = !grid.dataset.limit;   // the big tile only on the full page
+
+  const order = PRODUCTS.slice(0, limit).map((p, i) => ({
+    src: p.image, cap: p.name,
+    kind: (feature && i === 0) ? 'feature' : 'tall',
+    w: 982, h: 1147
   }));
 
   grid.innerHTML = order.map((s, i) => `
@@ -862,6 +873,9 @@ function initQuoteForm() {
    the source site does not publish them. */
 function initProductSchema() {
   if (typeof PRODUCTS === 'undefined' || !PRODUCTS.length) return;
+  // Only describe the catalogue on the page that actually lists all of it.
+  const grid = $('#pgrid');
+  if (!grid || grid.dataset.limit) return;
 
   const data = {
     '@context': 'https://schema.org',
@@ -891,20 +905,30 @@ function initProductSchema() {
 }
 
 
+/* ===== CONTACT FORM PREFILL =========================================
+   A product modal's "Request a quote" link arrives here as
+   contact.html?product=<article name>. Select it in the dropdown so the
+   enquiry starts from the article the buyer was looking at. */
+function initContactPrefill() {
+  const select = $('#productSelect');
+  if (!select) return;
+
+  const wanted = new URLSearchParams(location.search).get('product');
+  if (!wanted) return;
+
+  const hit = Array.from(select.options).find(o => o.value === wanted);
+  if (!hit) return;
+
+  select.value = wanted;
+  select.closest('label')?.classList.add('is-prefilled');
+}
+
+
 /* ===== MISC ======================================================== */
 function initMisc() {
   // Footer year
   const year = $('#year');
   if (year) year.textContent = new Date().getFullYear();
-
-  // Footer product links jump to a filtered category
-  $$('[data-jump]').forEach((a) => {
-    a.addEventListener('click', () => {
-      setTimeout(() => {
-        if (window.setProductCategory) window.setProductCategory(a.dataset.jump);
-      }, 550);
-    });
-  });
 
   /* The FAQ list uses the name="faq" attribute so the browser keeps one item
      open at a time. Older browsers ignore it, so close the others by hand. */
@@ -931,8 +955,10 @@ initParallax();
 initHeroStack();
 initTimeline();
 initProducts();
+initProductSelect();
 initFabrics();
 initGallery();
 initQuoteForm();
+initContactPrefill();
 initProductSchema();
 initMisc();
